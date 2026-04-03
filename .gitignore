@@ -1,0 +1,20 @@
+# Build outputs
+/rust-atm/target/
+/ts-atm/dist/
+
+# Dependencies
+/ts-atm/node_modules/
+
+# Runtime logs
+/rust-atm/logs/*.log
+/ts-atm/logs/*.log
+
+# Portable packaging outputs
+/packages/
+
+# Office temporary files
+~$*.pptx
+
+# OS/editor
+Thumbs.db
+.DS_Store

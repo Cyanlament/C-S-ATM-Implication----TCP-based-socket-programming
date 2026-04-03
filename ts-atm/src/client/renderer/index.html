@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ATM 客户端演示系统</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <h1>ATM 客户端演示系统</h1>
+          <p>Network Lab2 | TCP Socket Protocol | GUI Client</p>
+        </div>
+        <div class="hero-tags">
+          <span>TCP Socket</span>
+          <span>Port 2525</span>
+          <span>HELO PASS BALA WDRA BYE</span>
+        </div>
+      </header>
+
+      <section class="layout">
+        <section class="panel card controls">
+          <h2>连接与身份</h2>
+          <div class="row two">
+            <label for="host">Host</label>
+            <input id="host" value="127.0.0.1" />
+            <label for="port">Port</label>
+            <input id="port" value="2525" />
+          </div>
+          <div class="row actions">
+            <button id="connectBtn" class="btn primary">连接服务器</button>
+            <button id="disconnectBtn" class="btn ghost">断开连接</button>
+          </div>
+
+          <h2>协议指令</h2>
+          <div class="row two">
+            <label for="userId">User ID</label>
+            <input id="userId" value="10001" />
+            <label for="password">Password</label>
+            <input id="password" type="password" value="111111" />
+          </div>
+          <div class="row two">
+            <label for="amount">Withdraw Amount</label>
+            <input id="amount" value="100" />
+            <span class="hint">建议顺序：HELO -> PASS -> BALA/WDRA -> BYE</span>
+          </div>
+
+          <div class="cmd-grid">
+            <button id="heloBtn" class="btn">发送 HELO</button>
+            <button id="passBtn" class="btn">发送 PASS</button>
+            <button id="balaBtn" class="btn">查询 BALA</button>
+            <button id="wdraBtn" class="btn">发送 WDRA</button>
+            <button id="byeBtn" class="btn warn">发送 BYE</button>
+            <button id="autoFlowBtn" class="btn primary">执行演示流程</button>
+          </div>
+
+          <div id="status" data-state="idle">状态：未连接</div>
+        </section>
+
+        <section class="panel card">
+          <div class="panel-head">
+            <h2>会话日志</h2>
+            <button id="clearLogBtn" class="btn tiny ghost">清空日志</button>
+          </div>
+          <textarea id="logBox" rows="18" readonly></textarea>
+          <p class="log-tip">提示：日志中的 >> 和 << 分别表示请求与响应。</p>
+        </section>
+      </section>
+    </main>
+
+    <script src="../../../dist/src/client/renderer/renderer.js"></script>
+  </body>
+</html>
