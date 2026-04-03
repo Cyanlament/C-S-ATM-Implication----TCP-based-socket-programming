@@ -15,8 +15,9 @@
 
 ## 区别？
 
-- 想要更漂亮 GUI：优先用 TypeScript 版
+- 想用更漂亮 GUI：优先用 TypeScript 版
 - 想看 Rust 网络编程：用 Rust 版
+- 想看 Java: 出门左转
 
 ## 一键打包
 
@@ -28,6 +29,8 @@ powershell -ExecutionPolicy Bypass -File scripts/package-all.ps1
 
 - rust-atm-portable-win64.zip
 - ts-atm-portable-win64.zip
+
+## 可直接下载Release中的zip文件，点击bat文件运行
 
 ## 单独的README
 
