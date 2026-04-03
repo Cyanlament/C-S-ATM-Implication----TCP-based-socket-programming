@@ -1,6 +1,6 @@
 # TypeScript ATM 作业版（GUI 美化版）
 
-这版用 Electron 做客户端，界面更好看，演示也更丝滑。
+Electron 做客户端，界面更好看，演示也更丝滑。我讨厌qt
 
 ## 快速运行
 
@@ -31,7 +31,7 @@ npm run test:case
 - 取款日志：logs/withdraw.log
 - 运行日志：logs/server.log
 
-## 打包给同学
+## 打包
 
 在仓库根目录执行：
 
@@ -42,3 +42,5 @@ powershell -ExecutionPolicy Bypass -File scripts/package-ts.ps1
 packages/ts-atm-portable-win64.zip
 
 解压后双击 start-server.bat 和 start-client.bat 就能直接用。
+
+对。
