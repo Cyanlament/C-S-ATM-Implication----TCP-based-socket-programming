@@ -1,80 +1,74 @@
-# RFC-20232023 ATM Protocol (from lecture 08 PPT)
+# RFC-20242024 ATM Protocol
 
-This document is transcribed from the teacher PPT (slides 1-3 screenshots) and used as the single source of truth for both Rust and TypeScript implementations.
+本文件根据本次作业说明整理，作为 Rust 与 TypeScript 两个版本的统一协议依据。
 
-## Transport
+## 1. 传输层
 
 - TCP socket
-- Default server port: 2525
-- Text protocol, one message per line, UTF-8
-- Message separator: LF (`\n`)
+- 默认端口：`2525`
+- 文本协议，UTF-8，按行传输
+- 每条报文以换行符 `\n` 结束
 
-## Request Messages (ATM client -> Server)
+## 2. 客户端 -> 服务器报文
 
-1. `HELO <userid>`
-- Purpose: ATM tells server there is a card inserted and sends card/user ID.
+| 报文 | 说明 |
+| --- | --- |
+| `HELO <userid>` | ATM 插卡后发送卡号/用户号 |
+| `PASS <passwd>` | 用户输入口令后发送给服务器校验 |
+| `BALA` | 查询当前余额 |
+| `WDRA <amount>` | 请求支取金额 |
+| `QUIT` | 结束会话 |
 
-2. `PASS <passwd>`
-- Purpose: User enters PIN/password and ATM sends it to server.
+注意：`userid`、`passwd`、`amount` 与命令之间使用空格分隔。
 
-3. `BALA`
-- Purpose: Request account balance.
+## 3. 服务器 -> 客户端报文
 
-4. `WDRA <amount>`
-- Purpose: Request withdrawal.
+| 报文 | 说明 |
+| --- | --- |
+| `500 AUTH REQUIRE` | 收到合法 `HELO` 后，要求继续输入口令 |
+| `525 OK!` | 认证成功或取款成功 |
+| `401 ERROR!` | 认证失败、余额不足、非法命令、状态错误或参数错误 |
+| `AMNT:<amount>` | 返回当前余额 |
+| `BYE` | 正常结束会话 |
 
-5. `BYE`
-- Purpose: End current ATM session.
+## 4. 会话状态机
 
-## Response Messages (Server -> ATM client)
+服务端为每个客户端连接维护独立状态：
 
-1. `500 AUTH REQUIRED!`
-- Purpose: Ask for password/PIN after valid user identification.
+`STATE_INIT` -> 收到合法 `HELO` -> `STATE_AUTH_REQUIRED` -> 收到合法 `PASS` 且认证成功 -> `STATE_LOGGED_IN`
 
-2. `525 OK!`
-- Purpose: Requested operation is successful (password check, withdrawal success).
+只有在 `STATE_LOGGED_IN` 下才能执行：
 
-3. `401 ERROR!`
-- Purpose: Requested operation failed (invalid input, auth failed, insufficient funds, invalid state).
+- `BALA`
+- `WDRA`
 
-4. `AMNT:<amnt>`
-- Purpose: Sent in response to balance request.
+`QUIT` 用于正常结束会话。为了兼容题目中的客户端流程与示例代码实现，本项目允许客户端在任意阶段发送 `QUIT` 主动退出，服务器回复 `BYE` 后关闭连接。
 
-5. `BYE`
-- Purpose: Session closed.
+在其他状态下执行非法顺序命令时，统一返回：
 
-## Interaction Sequence
+```text
+401 ERROR!
+```
 
-1. Client sends `HELO <userid>`
-- Server checks if user ID is valid.
-- If valid: server replies `500 AUTH REQUIRED!`
-- If invalid: server replies `401 ERROR!`
+## 5. 数据持久化
 
-2. Client sends `PASS <passwd>`
-- Server checks password.
-- If valid: server replies `525 OK!`
-- If invalid: server replies `401 ERROR!`
+服务器使用两个文本文件：
 
-3. Client may send `BALA`
-- Server checks database and replies `AMNT:<amnt>`.
+- `users.txt`
+- `balances.txt`
 
-4. Client may send `WDRA <amount>`
-- Server checks if balance is enough.
-- If enough: update database and reply `525 OK!`.
-- Else: reply `401 ERROR!`.
+格式如下：
 
-5. Client sends `BYE`
-- Server replies `BYE` and closes session.
+```text
+100001 1234
+100002 1111
+100003 0721
+```
 
-## Logging Requirements (from PPT slide 4)
+```text
+100001 5000.00
+100002 1200.50
+100003 6000.00
+```
 
-Server must:
-- Read data file
-- Record logs for all exceptions
-- Record logs for all withdrawal operations
-
-Client side:
-- Must provide GUI
-
-Server side:
-- GUI is not required
+服务端启动时读取两个文件到内存。取款成功后立即更新内存中的余额，并重写整个 `balances.txt` 文件。

@@ -16,7 +16,7 @@
         <div class="hero-tags">
           <span>TCP Socket</span>
           <span>Port 2525</span>
-          <span>HELO PASS BALA WDRA BYE</span>
+          <span>HELO PASS BALA WDRA QUIT</span>
         </div>
       </header>
 
@@ -25,7 +25,7 @@
           <h2>连接与身份</h2>
           <div class="row two">
             <label for="host">Host</label>
-            <input id="host" value="127.0.0.1" />
+            <input id="host" value="172.19.153.48" />
             <label for="port">Port</label>
             <input id="port" value="2525" />
           </div>
@@ -37,14 +37,14 @@
           <h2>协议指令</h2>
           <div class="row two">
             <label for="userId">User ID</label>
-            <input id="userId" value="10001" />
+            <input id="userId" value="100001" />
             <label for="password">Password</label>
-            <input id="password" type="password" value="111111" />
+            <input id="password" type="password" value="1234" />
           </div>
           <div class="row two">
             <label for="amount">Withdraw Amount</label>
             <input id="amount" value="100" />
-            <span class="hint">建议顺序：HELO -> PASS -> BALA/WDRA -> BYE</span>
+            <span class="hint">建议顺序：HELO -> PASS -> BALA/WDRA -> QUIT</span>
           </div>
 
           <div class="cmd-grid">
@@ -52,7 +52,7 @@
             <button id="passBtn" class="btn">发送 PASS</button>
             <button id="balaBtn" class="btn">查询 BALA</button>
             <button id="wdraBtn" class="btn">发送 WDRA</button>
-            <button id="byeBtn" class="btn warn">发送 BYE</button>
+            <button id="byeBtn" class="btn warn">发送 QUIT</button>
             <button id="autoFlowBtn" class="btn primary">执行演示流程</button>
           </div>
 

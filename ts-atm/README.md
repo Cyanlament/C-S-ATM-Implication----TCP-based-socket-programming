@@ -1,44 +1,66 @@
-# TypeScript ATM 作业版（GUI 美化版）
+# TypeScript/Electron ATM
 
-这版用 Electron 做客户端，界面更好看，演示也更丝滑。
+TypeScript 版本包含：
 
-## 快速运行
+| 路径 | 作用 |
+| --- | --- |
+| `src/server.ts` | TCP 银行服务器 |
+| `src/client/` | Electron 图形客户端 |
+| `scripts/test_case.ts` | 自动跑认证、查余额、取款和退出流程 |
 
-先进入目录：
+默认监听端口是 `2525`。
 
-cd ts-atm
+## 数据文件
 
-1. 安装依赖
+服务端启动时读取项目目录下的：
 
+| 文件 | 内容 |
+| --- | --- |
+| `users.txt` | 卡号和 PIN |
+| `balances.txt` | 卡号和余额 |
+
+取款成功后会更新 `balances.txt`。
+
+## 运行
+
+安装依赖：
+
+```bash
 npm install
+```
 
-2. 启动服务端
+启动服务端：
 
-npm run start:server
+```bash
+npm run start:server -- 2525
+```
 
-3. 新开一个终端，启动 GUI 客户端
+启动 GUI 客户端：
 
-npm run start:client
+```bash
+npm run start:client -- 127.0.0.1 2525
+```
 
-4. 可选：跑自动测试脚本
+运行测试程序：
 
-npm run test:case
+```bash
+npm run test:case -- 127.0.0.1 2525 100001 1234 100
+```
 
-## 文件说明
+同机测试用 `127.0.0.1`。跨电脑测试时，客户端 Host 填服务端电脑的 WLAN IPv4 地址。
 
-- 数据文件：data/accounts.json
-- 异常日志：logs/exception.log
-- 取款日志：logs/withdraw.log
-- 运行日志：logs/server.log
+## 打包
 
-## 打包给同学
+在仓库根目录运行：
 
-在仓库根目录执行：
-
+```powershell
 powershell -ExecutionPolicy Bypass -File scripts/package-ts.ps1
+```
 
-会生成：
+输出文件：
 
+```text
 packages/ts-atm-portable-win64.zip
+```
 
-解压后双击 start-server.bat 和 start-client.bat 就能直接用。
+`node_modules/`、`dist/` 和 `packages/` 都是本地生成内容，不提交到 GitHub。

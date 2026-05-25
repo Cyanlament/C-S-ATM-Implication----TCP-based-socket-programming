@@ -1,7 +1,23 @@
 use std::io::{self, BufRead, BufReader, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
-fn send_and_recv(stream: &mut TcpStream, reader: &mut BufReader<TcpStream>, req: &str) -> io::Result<String> {
+const DEFAULT_HOST: &str = "172.19.153.48";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+fn connect_with_timeout(addr: &str) -> io::Result<TcpStream> {
+    let socket_addr = addr
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid address"))?;
+    TcpStream::connect_timeout(&socket_addr, CONNECT_TIMEOUT)
+}
+
+fn send_and_recv(
+    stream: &mut TcpStream,
+    reader: &mut BufReader<TcpStream>,
+    req: &str,
+) -> io::Result<String> {
     stream.write_all(req.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
@@ -15,7 +31,7 @@ fn run_case(host: &str, port: u16, user: &str, pass: &str, amount: f64) -> io::R
     let addr = format!("{host}:{port}");
 
     println!("[CASE1] normal flow against {addr}");
-    let mut stream = TcpStream::connect(&addr)?;
+    let mut stream = connect_with_timeout(&addr)?;
     let mut reader = BufReader::new(stream.try_clone()?);
 
     let steps = vec![
@@ -24,7 +40,7 @@ fn run_case(host: &str, port: u16, user: &str, pass: &str, amount: f64) -> io::R
         "BALA".to_string(),
         format!("WDRA {amount}"),
         "BALA".to_string(),
-        "BYE".to_string(),
+        "QUIT".to_string(),
     ];
 
     for req in steps {
@@ -34,13 +50,13 @@ fn run_case(host: &str, port: u16, user: &str, pass: &str, amount: f64) -> io::R
     }
 
     println!("\n[CASE2] wrong password");
-    let mut stream2 = TcpStream::connect(&addr)?;
+    let mut stream2 = connect_with_timeout(&addr)?;
     let mut reader2 = BufReader::new(stream2.try_clone()?);
 
     for req in [
         format!("HELO {user}"),
         "PASS wrong_password".to_string(),
-        "BYE".to_string(),
+        "QUIT".to_string(),
     ] {
         let resp = send_and_recv(&mut stream2, &mut reader2, &req)?;
         println!(">> {req}");
@@ -48,14 +64,14 @@ fn run_case(host: &str, port: u16, user: &str, pass: &str, amount: f64) -> io::R
     }
 
     println!("\n[CASE3] insufficient funds");
-    let mut stream3 = TcpStream::connect(&addr)?;
+    let mut stream3 = connect_with_timeout(&addr)?;
     let mut reader3 = BufReader::new(stream3.try_clone()?);
 
     for req in [
         format!("HELO {user}"),
         format!("PASS {pass}"),
         "WDRA 9999999".to_string(),
-        "BYE".to_string(),
+        "QUIT".to_string(),
     ] {
         let resp = send_and_recv(&mut stream3, &mut reader3, &req)?;
         println!(">> {req}");
@@ -67,20 +83,29 @@ fn run_case(host: &str, port: u16, user: &str, pass: &str, amount: f64) -> io::R
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let host = args.get(1).cloned().unwrap_or_else(|| "127.0.0.1".to_string());
+    let host = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_HOST.to_string());
     let port = args
         .get(2)
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(2525);
-    let user = args.get(3).cloned().unwrap_or_else(|| "10001".to_string());
-    let pass = args.get(4).cloned().unwrap_or_else(|| "111111".to_string());
+    let user = args
+        .get(3)
+        .cloned()
+        .unwrap_or_else(|| "100001".to_string());
+    let pass = args
+        .get(4)
+        .cloned()
+        .unwrap_or_else(|| "1234".to_string());
     let amount = args
         .get(5)
         .and_then(|a| a.parse::<f64>().ok())
         .unwrap_or(100.0);
 
-    if let Err(e) = run_case(&host, port, &user, &pass, amount) {
-        eprintln!("test case failed: {e}");
+    if let Err(error) = run_case(&host, port, &user, &pass, amount) {
+        eprintln!("test case failed: {error}");
         std::process::exit(1);
     }
 }

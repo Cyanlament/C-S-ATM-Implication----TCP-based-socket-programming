@@ -3,9 +3,9 @@ export type Request =
   | { kind: "PASS"; password: string }
   | { kind: "BALA" }
   | { kind: "WDRA"; amount: number }
-  | { kind: "BYE" };
+  | { kind: "QUIT" };
 
-export const RESP_AUTH_REQUIRED = "500 AUTH REQUIRED!";
+export const RESP_AUTH_REQUIRE = "500 AUTH REQUIRE";
 export const RESP_OK = "525 OK!";
 export const RESP_ERROR = "401 ERROR!";
 export const RESP_BYE = "BYE";
@@ -21,13 +21,13 @@ export function parseRequest(line: string): Request | null {
 
   switch (cmd) {
     case "HELO":
-      return parts[1] ? { kind: "HELO", userId: parts[1] } : null;
+      return parts.length === 2 ? { kind: "HELO", userId: parts[1] } : null;
     case "PASS":
-      return parts[1] ? { kind: "PASS", password: parts[1] } : null;
+      return parts.length === 2 ? { kind: "PASS", password: parts[1] } : null;
     case "BALA":
-      return { kind: "BALA" };
+      return parts.length === 1 ? { kind: "BALA" } : null;
     case "WDRA": {
-      if (!parts[1]) {
+      if (parts.length !== 2) {
         return null;
       }
       const amount = Number(parts[1]);
@@ -36,8 +36,8 @@ export function parseRequest(line: string): Request | null {
       }
       return { kind: "WDRA", amount };
     }
-    case "BYE":
-      return { kind: "BYE" };
+    case "QUIT":
+      return parts.length === 1 ? { kind: "QUIT" } : null;
     default:
       return null;
   }

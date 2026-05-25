@@ -5,12 +5,47 @@ import path from "node:path";
 type Pending = {
   resolve: (value: string) => void;
   reject: (reason?: unknown) => void;
+  timer: NodeJS.Timeout;
 };
+
+const DEFAULT_HOST = "172.19.153.48";
+const DEFAULT_PORT = 2525;
+const CONNECT_TIMEOUT_MS = 3000;
+const RESPONSE_TIMEOUT_MS = 5000;
+
+function friendlyNetError(error: unknown): Error {
+  const err = error as NodeJS.ErrnoException;
+  switch (err.code) {
+    case "ECONNREFUSED":
+      return new Error("Connection refused. Start the server and check the port.");
+    case "ETIMEDOUT":
+      return new Error("Connection timeout. Check the LAN IP, firewall, and Wi-Fi network.");
+    case "EHOSTUNREACH":
+    case "ENETUNREACH":
+      return new Error("Host unreachable. Check that both computers are on the same LAN.");
+    case "ECONNRESET":
+      return new Error("Connection reset by server.");
+    case "EADDRNOTAVAIL":
+      return new Error("Address is not available on this machine.");
+    default:
+      return new Error(err.code ? `Network error (${err.code})` : "Network error");
+  }
+}
 
 class AtmTcpClient {
   private socket: net.Socket | null = null;
   private buffer = "";
   private pending: Pending[] = [];
+
+  private rejectAll(error: Error): void {
+    while (this.pending.length) {
+      const next = this.pending.shift();
+      if (next) {
+        clearTimeout(next.timer);
+        next.reject(error);
+      }
+    }
+  }
 
   async connect(host: string, port: number): Promise<void> {
     if (this.socket && !this.socket.destroyed) {
@@ -18,12 +53,18 @@ class AtmTcpClient {
     }
 
     await new Promise<void>((resolve, reject) => {
+      let settled = false;
       const socket = net.createConnection({ host, port }, () => {
+        settled = true;
+        socket.setTimeout(0);
         this.socket = socket;
         resolve();
       });
 
       socket.setEncoding("utf-8");
+      socket.setTimeout(CONNECT_TIMEOUT_MS, () => {
+        socket.destroy(Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT" }));
+      });
 
       socket.on("data", (chunk: string) => {
         this.buffer += chunk;
@@ -42,33 +83,25 @@ class AtmTcpClient {
 
           const next = this.pending.shift();
           if (next) {
+            clearTimeout(next.timer);
             next.resolve(line);
           }
         }
       });
 
       socket.on("error", (error: Error) => {
-        while (this.pending.length) {
-          const next = this.pending.shift();
-          next?.reject(error);
-        }
+        const friendly = friendlyNetError(error);
+        this.rejectAll(friendly);
 
-        if (!this.socket) {
-          reject(error);
+        if (!settled) {
+          settled = true;
+          reject(friendly);
         }
       });
 
       socket.on("close", () => {
-        while (this.pending.length) {
-          const next = this.pending.shift();
-          next?.reject(new Error("socket closed"));
-        }
+        this.rejectAll(new Error("Connection closed."));
         this.socket = null;
-      });
-
-      socket.once("error", reject);
-      socket.once("connect", () => {
-        socket.off("error", reject);
       });
     });
   }
@@ -81,14 +114,23 @@ class AtmTcpClient {
     const socket = this.socket;
 
     return await new Promise<string>((resolve, reject) => {
-      this.pending.push({ resolve, reject });
+      const timer = setTimeout(() => {
+        const idx = this.pending.findIndex((p) => p.resolve === resolve);
+        if (idx >= 0) {
+          this.pending.splice(idx, 1);
+        }
+        reject(new Error("Response timeout. Check the server state and firewall."));
+      }, RESPONSE_TIMEOUT_MS);
+
+      this.pending.push({ resolve, reject, timer });
       socket.write(`${command.trim()}\n`, "utf-8", (err) => {
         if (err) {
           const idx = this.pending.findIndex((p) => p.resolve === resolve);
           if (idx >= 0) {
-            this.pending.splice(idx, 1);
+            const pending = this.pending.splice(idx, 1)[0];
+            clearTimeout(pending.timer);
           }
-          reject(err);
+          reject(friendlyNetError(err));
         }
       });
     });
@@ -107,12 +149,27 @@ class AtmTcpClient {
 
     this.socket?.destroy();
     this.socket = null;
-    this.pending = [];
+    this.rejectAll(new Error("Disconnected."));
     this.buffer = "";
   }
 }
 
 const atmClient = new AtmTcpClient();
+
+function resolveClientDefaults(): { host: string; port: number } {
+  const extra = process.argv
+    .slice(2)
+    .filter((arg) => !arg.startsWith("--"))
+    .filter((arg) => !arg.endsWith(".js") && !arg.endsWith(".exe"));
+
+  const host = extra[0] ?? process.env.ATM_HOST ?? DEFAULT_HOST;
+  const port = Number(extra[1] ?? process.env.ATM_PORT ?? String(DEFAULT_PORT));
+
+  return {
+    host,
+    port: Number.isFinite(port) && port > 0 && port <= 65535 ? port : DEFAULT_PORT,
+  };
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -137,6 +194,8 @@ ipcMain.handle("atm-connect", async (_event, payload: { host: string; port: numb
     return { ok: false, error: (error as Error).message };
   }
 });
+
+ipcMain.handle("atm-defaults", async () => resolveClientDefaults());
 
 ipcMain.handle("atm-send", async (_event, payload: { command: string }) => {
   try {

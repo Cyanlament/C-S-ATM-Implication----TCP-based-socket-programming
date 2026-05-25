@@ -1,8 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$packagesRoot = Join-Path $repoRoot "packages"
 
-Write-Host "=== 开始双版本打包 ==="
+Write-Host "=== Clean old portable packages ==="
+if (Test-Path $packagesRoot) {
+  Remove-Item -Recurse -Force $packagesRoot
+}
+
+Write-Host "=== Build portable packages ==="
 & (Join-Path $PSScriptRoot "package-rust.ps1")
 & (Join-Path $PSScriptRoot "package-ts.ps1")
-Write-Host "=== 全部打包完成，去 packages 目录拿压缩包吧 ==="
+Write-Host "=== Done. Packages are in the packages directory. ==="

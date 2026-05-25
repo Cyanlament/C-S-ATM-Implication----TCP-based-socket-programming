@@ -55,6 +55,11 @@ async function sendCommand(command: string): Promise<void> {
   setStatus(response, "idle");
 }
 
+window.atmApi.defaults().then((defaults) => {
+  hostInput.value = defaults.host;
+  portInput.value = String(defaults.port);
+});
+
 connectBtn.addEventListener("click", async () => {
   const host = hostInput.value.trim();
   const port = Number(portInput.value.trim() || "2525");
@@ -97,7 +102,7 @@ wdraBtn.addEventListener("click", async () => {
 });
 
 byeBtn.addEventListener("click", async () => {
-  await sendCommand("BYE");
+  await sendCommand("QUIT");
 });
 
 autoFlowBtn.addEventListener("click", async () => {
@@ -117,6 +122,7 @@ autoFlowBtn.addEventListener("click", async () => {
     "BALA",
     `WDRA ${amountInput.value.trim()}`,
     "BALA",
+    "QUIT",
   ];
 
   for (const command of sequence) {

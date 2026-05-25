@@ -1,8 +1,12 @@
 use eframe::egui::{self, Color32, RichText, Stroke};
-use rust_atm::{RESP_BYE, RESP_ERROR};
+use rust_atm::RESP_BYE;
 use std::io::{self, BufRead, BufReader, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
+
+const DEFAULT_HOST: &str = "172.19.153.48";
+const DEFAULT_PORT: &str = "2525";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 struct Connection {
     writer: TcpStream,
@@ -11,7 +15,11 @@ struct Connection {
 
 impl Connection {
     fn connect(addr: &str) -> io::Result<Self> {
-        let writer = TcpStream::connect(addr)?;
+        let socket_addr = addr
+            .to_socket_addrs()?
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid address"))?;
+        let writer = TcpStream::connect_timeout(&socket_addr, CONNECT_TIMEOUT)?;
         writer.set_read_timeout(Some(Duration::from_secs(5)))?;
         writer.set_write_timeout(Some(Duration::from_secs(5)))?;
         let reader = BufReader::new(writer.try_clone()?);
@@ -47,13 +55,45 @@ struct AtmGui {
     conn: Option<Connection>,
 }
 
+fn friendly_error(error: &io::Error) -> String {
+    match error.kind() {
+        io::ErrorKind::ConnectionRefused => {
+            "Connection refused. Start the server and check the port.".to_string()
+        }
+        io::ErrorKind::TimedOut => {
+            "Connection timeout. Check the LAN IP, firewall, and Wi-Fi network.".to_string()
+        }
+        io::ErrorKind::NotFound | io::ErrorKind::AddrNotAvailable => {
+            "Address is not reachable on this machine.".to_string()
+        }
+        io::ErrorKind::InvalidInput => "Invalid host or port.".to_string(),
+        io::ErrorKind::UnexpectedEof => "Server closed the connection.".to_string(),
+        io::ErrorKind::WouldBlock => "Network operation timed out.".to_string(),
+        _ => format!("Network error ({:?})", error.kind()),
+    }
+}
+
+fn client_defaults_from_args() -> (String, String) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let host = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_HOST.to_string());
+    let port = args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_PORT.to_string());
+    (host, port)
+}
+
 impl Default for AtmGui {
     fn default() -> Self {
+        let (host, port) = client_defaults_from_args();
         Self {
-            host: "127.0.0.1".to_string(),
-            port: "2525".to_string(),
-            user_id: "10001".to_string(),
-            password: "111111".to_string(),
+            host,
+            port,
+            user_id: "100001".to_string(),
+            password: "1234".to_string(),
             withdraw_amount: "100".to_string(),
             status: "Disconnected".to_string(),
             transcript: String::new(),
@@ -82,8 +122,9 @@ impl AtmGui {
                 self.append_transcript(&format!("[SYS] connected: {addr}"));
             }
             Err(e) => {
-                self.status = format!("Connect failed: {e}");
-                self.append_transcript(&format!("[ERR] connect failed: {e}"));
+                let message = friendly_error(&e);
+                self.status = format!("Connect failed: {message}");
+                self.append_transcript(&format!("[ERR] connect failed: {message}"));
             }
         }
     }
@@ -112,17 +153,14 @@ impl AtmGui {
                 self.append_transcript(&format!("<< {resp}"));
                 self.status = format!("Server: {resp}");
 
-                if resp == RESP_BYE || resp == RESP_ERROR {
-                    // Keep connection for ERROR, close only on BYE.
-                    if resp == RESP_BYE {
-                        // BYE 到站，下车收工。
-                        self.conn = None;
-                    }
+                if resp == RESP_BYE {
+                    self.conn = None;
                 }
             }
             Err(e) => {
-                self.status = format!("Network error: {e}");
-                self.append_transcript(&format!("[ERR] network error: {e}"));
+                let message = friendly_error(&e);
+                self.status = format!("Network error: {message}");
+                self.append_transcript(&format!("[ERR] network error: {message}"));
                 self.conn = None;
             }
         }
@@ -135,6 +173,7 @@ impl AtmGui {
         self.send_request("BALA".to_string());
         self.send_request(format!("WDRA {}", self.withdraw_amount.trim()));
         self.send_request("BALA".to_string());
+        self.send_request("QUIT".to_string());
     }
 
     fn status_style(&self) -> (Color32, &'static str) {
@@ -142,11 +181,11 @@ impl AtmGui {
         if self.status.contains("401") || lower.contains("error") || lower.contains("failed") {
             (Color32::from_rgb(185, 28, 28), "Status: ERROR")
         } else if self.status.contains("500") {
-            (Color32::from_rgb(124, 45, 18), "Status: AUTH REQUIRED")
+            (Color32::from_rgb(124, 45, 18), "Status: AUTH REQUIRE")
         } else if self.status.contains("525")
             || self.status.contains("AMNT:")
             || self.status.contains("BYE")
-            || lower.contains("connected")
+            || lower.starts_with("connected")
         {
             (Color32::from_rgb(21, 128, 61), "Status: OK")
         } else {
@@ -160,7 +199,7 @@ impl AtmGui {
             .stroke(Stroke::new(1.0, Color32::from_rgb(203, 213, 225)))
             .show(ui, |ui| {
                 ui.heading("Control Panel");
-                ui.label("Protocol: HELO / PASS / BALA / WDRA / BYE");
+                ui.label("Protocol: HELO / PASS / BALA / WDRA / QUIT");
                 ui.separator();
 
                 egui::Grid::new("conn_grid")
@@ -188,7 +227,7 @@ impl AtmGui {
                             egui::TextEdit::singleline(&mut self.withdraw_amount),
                         );
                         ui.label("Tips");
-                        ui.label("HELO -> PASS first");
+                        ui.label("Use 172.19.153.48 for LAN");
                         ui.end_row();
                     });
 
@@ -215,8 +254,8 @@ impl AtmGui {
                     if ui.button("Send WDRA").clicked() {
                         self.send_request(format!("WDRA {}", self.withdraw_amount.trim()));
                     }
-                    if ui.button("Send BYE").clicked() {
-                        self.send_request("BYE".to_string());
+                    if ui.button("Send QUIT").clicked() {
+                        self.send_request("QUIT".to_string());
                     }
                     if ui.button("Run Demo Flow").clicked() {
                         self.run_demo_flow();

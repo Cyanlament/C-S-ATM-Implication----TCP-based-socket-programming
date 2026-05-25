@@ -1,24 +1,31 @@
 use rust_atm::{
-    append_log, format_amount_response, load_accounts, parse_request, save_accounts, Request,
-    RESP_AUTH_REQUIRED, RESP_BYE, RESP_ERROR, RESP_OK,
+    append_log, format_amount_response, load_balances, load_users, parse_request, save_balances,
+    BalancesDb, Request, UsersDb, RESP_AUTH_REQUIRE, RESP_BYE, RESP_ERROR, RESP_OK,
 };
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionState {
+    Init,
+    AuthRequired,
+    LoggedIn,
+}
+
 #[derive(Debug)]
 struct Session {
+    state: SessionState,
     current_user: Option<String>,
-    authenticated: bool,
 }
 
 impl Session {
     fn new() -> Self {
         Self {
+            state: SessionState::Init,
             current_user: None,
-            authenticated: false,
         }
     }
 }
@@ -29,15 +36,57 @@ fn write_line(stream: &mut TcpStream, line: &str) -> io::Result<()> {
     stream.flush()
 }
 
+fn parse_port_arg(arg: Option<String>) -> u16 {
+    let Some(raw) = arg else {
+        return 2525;
+    };
+
+    match raw.trim().parse::<u16>() {
+        Ok(port) if port > 0 => port,
+        _ => {
+            eprintln!("invalid port `{raw}`, fallback to 2525");
+            2525
+        }
+    }
+}
+
+fn resolve_paths() -> io::Result<(PathBuf, PathBuf, PathBuf)> {
+    let mut user_candidates = vec![PathBuf::from("users.txt")];
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            user_candidates.push(exe_dir.join("users.txt"));
+        }
+    }
+
+    for users_path in user_candidates {
+        let balance_candidate = users_path.with_file_name("balances.txt");
+
+        if users_path.exists() && balance_candidate.exists() {
+            let app_root = users_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf();
+            let logs_dir = app_root.join("logs");
+            return Ok((users_path, balance_candidate, logs_dir));
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "cannot find users.txt and balances.txt from current directory or executable location",
+    ))
+}
+
 fn handle_client(
     mut stream: TcpStream,
-    db: Arc<Mutex<rust_atm::AccountsDb>>,
-    data_path: PathBuf,
+    users: Arc<UsersDb>,
+    balances: Arc<Mutex<BalancesDb>>,
+    balances_path: PathBuf,
     logs_dir: PathBuf,
 ) -> io::Result<()> {
     let peer = stream
         .peer_addr()
-        .map(|a| a.to_string())
+        .map(|addr| addr.to_string())
         .unwrap_or_else(|_| "unknown-peer".to_string());
 
     append_log(&logs_dir.join("server.log"), &format!("client connected: {peer}"))?;
@@ -61,29 +110,24 @@ fn handle_client(
             continue;
         }
 
-        let req = parse_request(raw);
-        if req.is_none() {
-            // 不认识的命令，先记日志再回 401，主打有据可查。
+        let Some(request) = parse_request(raw) else {
             append_log(
                 &logs_dir.join("exception.log"),
                 &format!("{peer} invalid request: {raw}"),
             )?;
             write_line(&mut stream, RESP_ERROR)?;
             continue;
-        }
+        };
 
-        match req.expect("checked is_some") {
+        match request {
             Request::Helo(user_id) => {
-                let exists = {
-                    let db_guard = db.lock().expect("accounts db mutex poisoned");
-                    db_guard.contains_key(&user_id)
-                };
-
-                if exists {
+                if users.contains_key(&user_id) {
+                    session.state = SessionState::AuthRequired;
                     session.current_user = Some(user_id);
-                    session.authenticated = false;
-                    write_line(&mut stream, RESP_AUTH_REQUIRED)?;
+                    write_line(&mut stream, RESP_AUTH_REQUIRE)?;
                 } else {
+                    session.state = SessionState::Init;
+                    session.current_user = None;
                     append_log(
                         &logs_dir.join("exception.log"),
                         &format!("{peer} unknown user id"),
@@ -92,25 +136,23 @@ fn handle_client(
                 }
             }
             Request::Pass(password) => {
-                let Some(user_id) = &session.current_user else {
+                if session.state != SessionState::AuthRequired {
                     append_log(
                         &logs_dir.join("exception.log"),
-                        &format!("{peer} PASS before HELO"),
+                        &format!("{peer} PASS in invalid state"),
                     )?;
+                    write_line(&mut stream, RESP_ERROR)?;
+                    continue;
+                }
+
+                let Some(user_id) = session.current_user.as_ref() else {
                     write_line(&mut stream, RESP_ERROR)?;
                     continue;
                 };
 
-                let ok = {
-                    let db_guard = db.lock().expect("accounts db mutex poisoned");
-                    db_guard
-                        .get(user_id)
-                        .map(|acc| acc.password == password)
-                        .unwrap_or(false)
-                };
-
+                let ok = users.get(user_id).map(|pin| pin == &password).unwrap_or(false);
                 if ok {
-                    session.authenticated = true;
+                    session.state = SessionState::LoggedIn;
                     write_line(&mut stream, RESP_OK)?;
                 } else {
                     append_log(
@@ -121,33 +163,42 @@ fn handle_client(
                 }
             }
             Request::Bala => {
-                if !session.authenticated {
-                    if session.current_user.is_some() {
-                        write_line(&mut stream, RESP_AUTH_REQUIRED)?;
-                    } else {
-                        write_line(&mut stream, RESP_ERROR)?;
-                    }
+                if session.state != SessionState::LoggedIn {
+                    append_log(
+                        &logs_dir.join("exception.log"),
+                        &format!("{peer} BALA in invalid state"),
+                    )?;
+                    write_line(&mut stream, RESP_ERROR)?;
                     continue;
                 }
 
-                let user_id = session.current_user.as_ref().expect("authed has user id");
-                let balance = {
-                    let db_guard = db.lock().expect("accounts db mutex poisoned");
-                    db_guard.get(user_id).map(|acc| acc.balance).unwrap_or(-1.0)
+                let user_id = session.current_user.as_ref().expect("logged in user");
+                let amount = {
+                    let balances_guard = balances.lock().expect("balances mutex poisoned");
+                    balances_guard.get(user_id).copied()
                 };
 
-                if balance < 0.0 {
+                if let Some(balance) = amount {
+                    write_line(&mut stream, &format_amount_response(balance))?;
+                } else {
                     append_log(
                         &logs_dir.join("exception.log"),
-                        &format!("{peer} user not found while BALA: {user_id}"),
+                        &format!("{peer} missing balance for user {user_id}"),
                     )?;
                     write_line(&mut stream, RESP_ERROR)?;
-                } else {
-                    write_line(&mut stream, &format_amount_response(balance))?;
                 }
             }
             Request::Wdra(amount) => {
-                if amount <= 0.0 {
+                if session.state != SessionState::LoggedIn {
+                    append_log(
+                        &logs_dir.join("exception.log"),
+                        &format!("{peer} WDRA in invalid state"),
+                    )?;
+                    write_line(&mut stream, RESP_ERROR)?;
+                    continue;
+                }
+
+                if !amount.is_finite() || amount <= 0.0 {
                     append_log(
                         &logs_dir.join("exception.log"),
                         &format!("{peer} invalid withdraw amount: {amount}"),
@@ -156,57 +207,44 @@ fn handle_client(
                     continue;
                 }
 
-                if !session.authenticated {
-                    if session.current_user.is_some() {
-                        write_line(&mut stream, RESP_AUTH_REQUIRED)?;
-                    } else {
-                        write_line(&mut stream, RESP_ERROR)?;
-                    }
-                    continue;
-                }
-
-                let user_id = session
-                    .current_user
-                    .clone()
-                    .expect("authenticated session should have user id");
-
-                let mut db_guard = db.lock().expect("accounts db mutex poisoned");
-                let Some(account) = db_guard.get_mut(&user_id) else {
+                let user_id = session.current_user.as_ref().expect("logged in user").clone();
+                let mut balances_guard = balances.lock().expect("balances mutex poisoned");
+                let Some(balance) = balances_guard.get_mut(&user_id) else {
                     append_log(
                         &logs_dir.join("exception.log"),
-                        &format!("{peer} user not found while WDRA: {user_id}"),
+                        &format!("{peer} missing balance for user {user_id}"),
                     )?;
                     write_line(&mut stream, RESP_ERROR)?;
                     continue;
                 };
 
-                if account.balance >= amount {
-                    let before = account.balance;
-                    account.balance -= amount;
-                    let after = account.balance;
+                if *balance >= amount {
+                    let before = *balance;
+                    *balance -= amount;
+                    let after = *balance;
 
-                    // 取款成功后立刻落盘，防止“余额失忆”。
-                    save_accounts(&data_path, &db_guard)?;
+                    save_balances(&balances_path, &balances_guard)?;
                     append_log(
                         &logs_dir.join("withdraw.log"),
                         &format!(
                             "{peer} user={user_id} withdraw={amount:.2} before={before:.2} after={after:.2}"
                         ),
                     )?;
-
                     write_line(&mut stream, RESP_OK)?;
                 } else {
                     append_log(
                         &logs_dir.join("exception.log"),
                         &format!(
                             "{peer} insufficient funds user={user_id} request={amount:.2} balance={:.2}",
-                            account.balance
+                            *balance
                         ),
                     )?;
                     write_line(&mut stream, RESP_ERROR)?;
                 }
             }
-            Request::Bye => {
+            Request::Quit => {
+                session.state = SessionState::Init;
+                session.current_user = None;
                 write_line(&mut stream, RESP_BYE)?;
                 append_log(&logs_dir.join("server.log"), &format!("session bye: {peer}"))?;
                 break;
@@ -218,43 +256,43 @@ fn handle_client(
 }
 
 fn main() -> io::Result<()> {
-    let bind_addr = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "0.0.0.0:2525".to_string());
+    let port = parse_port_arg(std::env::args().nth(1));
+    let bind_addr = format!("0.0.0.0:{port}");
 
-    let data_path = PathBuf::from("data/accounts.json");
-    let logs_dir = PathBuf::from("logs");
-
-    let db = load_accounts(&data_path)?;
-    let shared_db = Arc::new(Mutex::new(db));
+    let (users_path, balances_path, logs_dir) = resolve_paths()?;
+    let users = Arc::new(load_users(&users_path)?);
+    let balances = Arc::new(Mutex::new(load_balances(&balances_path)?));
 
     let listener = TcpListener::bind(&bind_addr)?;
     append_log(
         &logs_dir.join("server.log"),
         &format!("server listening on {bind_addr}"),
     )?;
+    println!("Rust ATM server started on {bind_addr}");
 
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                let db = Arc::clone(&shared_db);
-                let data_path = data_path.clone();
+                let users = Arc::clone(&users);
+                let balances = Arc::clone(&balances);
+                let balances_path = balances_path.clone();
                 let logs_dir = logs_dir.clone();
 
                 thread::spawn(move || {
-                    // 每个客户端一条线程，大家排队办业务。
-                    if let Err(e) = handle_client(stream, db, data_path, logs_dir.clone()) {
+                    if let Err(error) =
+                        handle_client(stream, users, balances, balances_path, logs_dir.clone())
+                    {
                         let _ = append_log(
                             &logs_dir.join("exception.log"),
-                            &format!("client handler crashed: {e}"),
+                            &format!("client handler crashed: {error}"),
                         );
                     }
                 });
             }
-            Err(e) => {
+            Err(error) => {
                 append_log(
                     &logs_dir.join("exception.log"),
-                    &format!("accept error: {e}"),
+                    &format!("accept error: {error}"),
                 )?;
             }
         }

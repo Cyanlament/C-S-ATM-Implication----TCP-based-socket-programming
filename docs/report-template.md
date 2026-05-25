@@ -1,110 +1,113 @@
-# Lab2 Report Template (ATM over TCP)
+# 作业2 ATM 实验报告模板
 
-## 1. Basic Info
+## 一、基本信息
 
-- Student name:
-- Student ID:
-- Group ID:
-- Partner:
-- Course week:
-- GitHub repository link:
+- 姓名：
+- 学号：
+- 班级：
+- 指导教师：
+- GitHub 仓库：
 
-## 2. Requirement Mapping (from PPT)
+## 二、实验目的
 
-- [ ] Use TCP socket programming
-- [ ] Follow RFC-20232023 protocol messages
-- [ ] Client has GUI
-- [ ] Server has no GUI
-- [ ] Server reads account data file
-- [ ] Server logs all exceptions
-- [ ] Server logs all withdrawal records
-- [ ] Default port is 2525
-- [ ] Client provides complete test case to visit other group server
+1. 理解基于 TCP 的自定义应用层协议设计方法。
+2. 掌握 ATM 客户端与银行服务器端之间的 Socket 通信流程。
+3. 实现用户认证、余额查询、支取和退出等核心业务逻辑。
+4. 使用文本文件实现用户口令和账户余额的持久化管理。
+5. 掌握服务端状态机和多客户端并发处理方法。
 
-## 3. Protocol Design
+## 三、协议设计说明
 
-Request messages:
-- HELO <userid>
-- PASS <passwd>
-- BALA
-- WDRA <amount>
-- BYE
+### 3.1 请求报文
 
-Response messages:
-- 500 AUTH REQUIRED!
-- 525 OK!
-- 401 ERROR!
-- AMNT:<amnt>
-- BYE
+- `HELO <userid>`
+- `PASS <passwd>`
+- `BALA`
+- `WDRA <amount>`
+- `QUIT`
 
-## 4. System Design
+### 3.2 响应报文
 
-### 4.1 Rust version
+- `500 AUTH REQUIRE`
+- `525 OK!`
+- `401 ERROR!`
+- `AMNT:<amount>`
+- `BYE`
 
-- Server entry:
-- Client GUI entry:
-- Data file path:
-- Log file paths:
+### 3.3 状态转换
 
-### 4.2 TypeScript version
+- `STATE_INIT`
+- `STATE_AUTH_REQUIRED`
+- `STATE_LOGGED_IN`
 
-- Server entry:
-- Client GUI entry:
-- Data file path:
-- Log file paths:
+说明哪些状态允许哪些命令，非法命令如何返回。
 
-## 5. Test Cases
+## 四、程序结构
 
-### 5.1 Normal flow
-- HELO valid user -> 500 AUTH REQUIRED!
-- PASS valid password -> 525 OK!
-- BALA -> AMNT:<value>
-- WDRA valid amount with enough balance -> 525 OK!
-- BYE -> BYE
+### 4.1 Rust 版本
 
-### 5.2 Error flow
-- PASS before HELO -> 401 ERROR!
-- Invalid user in HELO -> 401 ERROR!
-- Wrong password in PASS -> 401 ERROR!
-- WDRA with insufficient funds -> 401 ERROR!
-- Invalid request format -> 401 ERROR!
+- 服务端入口：
+- 客户端入口：
+- 测试脚本：
+- 数据文件：
+- 日志文件：
 
-### 5.3 Cross-group server test
+### 4.2 TypeScript 版本
 
-- Target group server host:
-- Target group server port:
-- Steps and responses:
-- Result:
+- 服务端入口：
+- 客户端入口：
+- 测试脚本：
+- 数据文件：
+- 日志文件：
 
-## 6. Run Commands
+## 五、运行步骤
 
-### Rust
-- Server:
-- GUI client:
-- Test script:
+### 5.1 Rust
 
-### TypeScript
-- Install:
-- Server:
-- GUI client:
-- Test script:
+- 启动服务端：
+- 启动客户端：
+- 运行测试：
 
-## 7. Logs and Evidence
+### 5.2 TypeScript
 
-Attach screenshots or snippets for:
-- GUI client interaction
-- exception.log
-- withdraw.log
-- Updated account data after withdrawal
+- 安装依赖：
+- 启动服务端：
+- 启动客户端：
+- 运行测试：
 
-## 8. Problems and Fixes
+## 六、测试结果
 
-- Issue 1:
-- Root cause:
-- Fix:
+至少覆盖以下场景：
 
-## 9. Conclusion
+1. 认证成功
+2. 查询余额
+3. 取款成功
+4. 余额不足
+5. 退出
 
-- What is completed:
-- Remaining work:
-- Personal reflection:
+建议写出关键命令与服务器响应。
+
+## 七、运行截图
+
+至少包含：
+
+- 认证成功
+- 查询余额
+- 取款成功
+- 余额不足
+- 退出
+
+## 八、遇到的问题及解决方法
+
+- 问题 1：
+- 原因分析：
+- 解决方法：
+
+## 九、心得体会
+
+说明对以下内容的理解：
+
+- TCP 自定义协议
+- 服务端状态管理
+- 多客户端并发
+- 文本文件持久化更新

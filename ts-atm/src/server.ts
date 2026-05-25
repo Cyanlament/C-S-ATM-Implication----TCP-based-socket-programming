@@ -4,29 +4,46 @@ import path from "node:path";
 import {
   amountResponse,
   parseRequest,
-  RESP_AUTH_REQUIRED,
+  RESP_AUTH_REQUIRE,
   RESP_BYE,
   RESP_ERROR,
   RESP_OK,
   Request,
 } from "./common/protocol";
 
-type Account = {
-  password: string;
-  balance: number;
-};
-
-type AccountsDb = Record<string, Account>;
+type SessionState = "INIT" | "AUTH_REQUIRED" | "LOGGED_IN";
 
 type Session = {
+  state: SessionState;
   currentUserId: string | null;
-  authenticated: boolean;
 };
 
+type UserPasswords = Record<string, string>;
+type UserBalances = Record<string, number>;
+
 const ROOT = path.resolve(__dirname, "../..");
-const DATA_FILE = path.join(ROOT, "data", "accounts.json");
+const USERS_FILE = path.join(ROOT, "users.txt");
+const BALANCES_FILE = path.join(ROOT, "balances.txt");
 const LOG_DIR = path.join(ROOT, "logs");
-const PORT = Number(process.env.ATM_PORT ?? "2525");
+
+function resolvePort(raw: string | undefined, fallback = 2525): number {
+  if (!raw) {
+    return fallback;
+  }
+
+  if (!/^\d+$/.test(raw.trim())) {
+    console.error(`Invalid port ${raw}; using default port ${fallback}.`);
+    return fallback;
+  }
+
+  const port = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    console.error(`Port out of range ${raw}; using default port ${fallback}.`);
+    return fallback;
+  }
+
+  return port;
+}
 
 function ensureLogDir(): void {
   fs.mkdirSync(LOG_DIR, { recursive: true });
@@ -35,20 +52,61 @@ function ensureLogDir(): void {
 function appendLog(filename: string, message: string): void {
   ensureLogDir();
   const stamp = Math.floor(Date.now() / 1000);
-  // 日志像黑匣子，关键时刻能保命。
   fs.appendFileSync(path.join(LOG_DIR, filename), `[${stamp}] ${message}\n`, "utf-8");
 }
 
-function loadAccounts(): AccountsDb {
-  const raw = fs.readFileSync(DATA_FILE, "utf-8");
-  return JSON.parse(raw) as AccountsDb;
+function loadUsers(): UserPasswords {
+  const users: UserPasswords = {};
+  const raw = fs.readFileSync(USERS_FILE, "utf-8");
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const parts = trimmed.split(/\s+/);
+    if (parts.length === 2) {
+      users[parts[0]] = parts[1];
+    }
+  }
+
+  return users;
 }
 
-function saveAccounts(db: AccountsDb): void {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), "utf-8");
+function loadBalances(): UserBalances {
+  const balances: UserBalances = {};
+  const raw = fs.readFileSync(BALANCES_FILE, "utf-8");
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const parts = trimmed.split(/\s+/);
+    if (parts.length !== 2) {
+      continue;
+    }
+
+    const amount = Number(parts[1]);
+    if (Number.isFinite(amount)) {
+      balances[parts[0]] = amount;
+    }
+  }
+
+  return balances;
 }
 
-let accounts = loadAccounts();
+function saveBalances(balances: UserBalances): void {
+  const lines = Object.keys(balances)
+    .sort()
+    .map((userId) => `${userId} ${balances[userId].toFixed(2)}`);
+  fs.writeFileSync(BALANCES_FILE, `${lines.join("\n")}\n`, "utf-8");
+}
+
+const userPasswords = loadUsers();
+const userBalances = loadBalances();
 
 function sendLine(socket: Socket, line: string): void {
   socket.write(`${line}\n`);
@@ -60,113 +118,102 @@ function handleRequest(
   session: Session,
   peer: string,
 ): void {
-  // 协议闯关从这里开始，别插队。
-  if (request.kind === "HELO") {
-    if (accounts[request.userId]) {
-      session.currentUserId = request.userId;
-      session.authenticated = false;
-      sendLine(socket, RESP_AUTH_REQUIRED);
+  switch (request.kind) {
+    case "HELO":
+      if (userPasswords[request.userId]) {
+        session.state = "AUTH_REQUIRED";
+        session.currentUserId = request.userId;
+        sendLine(socket, RESP_AUTH_REQUIRE);
+      } else {
+        session.state = "INIT";
+        session.currentUserId = null;
+        appendLog("exception.log", `${peer} unknown user id: ${request.userId}`);
+        sendLine(socket, RESP_ERROR);
+      }
       return;
-    }
-    appendLog("exception.log", `${peer} unknown user id: ${request.userId}`);
-    sendLine(socket, RESP_ERROR);
-    return;
-  }
 
-  if (request.kind === "PASS") {
-    if (!session.currentUserId) {
-      appendLog("exception.log", `${peer} PASS before HELO`);
-      sendLine(socket, RESP_ERROR);
+    case "PASS":
+      if (session.state !== "AUTH_REQUIRED" || !session.currentUserId) {
+        appendLog("exception.log", `${peer} PASS in invalid state`);
+        sendLine(socket, RESP_ERROR);
+        return;
+      }
+
+      if (userPasswords[session.currentUserId] === request.password) {
+        session.state = "LOGGED_IN";
+        sendLine(socket, RESP_OK);
+      } else {
+        appendLog("exception.log", `${peer} password failed for ${session.currentUserId}`);
+        sendLine(socket, RESP_ERROR);
+      }
       return;
-    }
 
-    const acc = accounts[session.currentUserId];
-    if (acc && acc.password === request.password) {
-      session.authenticated = true;
-      sendLine(socket, RESP_OK);
+    case "BALA":
+      if (session.state !== "LOGGED_IN" || !session.currentUserId) {
+        appendLog("exception.log", `${peer} BALA in invalid state`);
+        sendLine(socket, RESP_ERROR);
+        return;
+      }
+
+      if (!(session.currentUserId in userBalances)) {
+        appendLog("exception.log", `${peer} missing balance for ${session.currentUserId}`);
+        sendLine(socket, RESP_ERROR);
+        return;
+      }
+
+      sendLine(socket, amountResponse(userBalances[session.currentUserId]));
       return;
-    }
 
-    appendLog("exception.log", `${peer} password failed for ${session.currentUserId}`);
-    sendLine(socket, RESP_ERROR);
-    return;
-  }
+    case "WDRA":
+      if (session.state !== "LOGGED_IN" || !session.currentUserId) {
+        appendLog("exception.log", `${peer} WDRA in invalid state`);
+        sendLine(socket, RESP_ERROR);
+        return;
+      }
 
-  if (request.kind === "BALA") {
-    if (!session.currentUserId) {
-      sendLine(socket, RESP_ERROR);
+      if (!Number.isFinite(request.amount) || request.amount <= 0) {
+        appendLog("exception.log", `${peer} invalid withdraw amount: ${request.amount}`);
+        sendLine(socket, RESP_ERROR);
+        return;
+      }
+
+      if (!(session.currentUserId in userBalances)) {
+        appendLog("exception.log", `${peer} missing balance for ${session.currentUserId}`);
+        sendLine(socket, RESP_ERROR);
+        return;
+      }
+
+      if (userBalances[session.currentUserId] >= request.amount) {
+        const before = userBalances[session.currentUserId];
+        userBalances[session.currentUserId] -= request.amount;
+        saveBalances(userBalances);
+        appendLog(
+          "withdraw.log",
+          `${peer} user=${session.currentUserId} withdraw=${request.amount.toFixed(2)} before=${before.toFixed(2)} after=${userBalances[session.currentUserId].toFixed(2)}`,
+        );
+        sendLine(socket, RESP_OK);
+      } else {
+        appendLog(
+          "exception.log",
+          `${peer} insufficient funds user=${session.currentUserId} request=${request.amount.toFixed(2)} balance=${userBalances[session.currentUserId].toFixed(2)}`,
+        );
+        sendLine(socket, RESP_ERROR);
+      }
       return;
-    }
-    if (!session.authenticated) {
-      sendLine(socket, RESP_AUTH_REQUIRED);
+
+    case "QUIT":
+      session.state = "INIT";
+      session.currentUserId = null;
+      sendLine(socket, RESP_BYE);
+      socket.end();
       return;
-    }
-
-    const acc = accounts[session.currentUserId];
-    if (!acc) {
-      appendLog("exception.log", `${peer} user missing in BALA: ${session.currentUserId}`);
-      sendLine(socket, RESP_ERROR);
-      return;
-    }
-
-    sendLine(socket, amountResponse(acc.balance));
-    return;
-  }
-
-  if (request.kind === "WDRA") {
-    if (request.amount <= 0) {
-      appendLog("exception.log", `${peer} invalid withdraw amount: ${request.amount}`);
-      sendLine(socket, RESP_ERROR);
-      return;
-    }
-
-    if (!session.currentUserId) {
-      sendLine(socket, RESP_ERROR);
-      return;
-    }
-    if (!session.authenticated) {
-      sendLine(socket, RESP_AUTH_REQUIRED);
-      return;
-    }
-
-    const acc = accounts[session.currentUserId];
-    if (!acc) {
-      appendLog("exception.log", `${peer} user missing in WDRA: ${session.currentUserId}`);
-      sendLine(socket, RESP_ERROR);
-      return;
-    }
-
-    if (acc.balance >= request.amount) {
-      const before = acc.balance;
-      acc.balance -= request.amount;
-      // 钱包更新写回文件，账目要清清楚楚。
-      saveAccounts(accounts);
-      appendLog(
-        "withdraw.log",
-        `${peer} user=${session.currentUserId} withdraw=${request.amount.toFixed(2)} before=${before.toFixed(2)} after=${acc.balance.toFixed(2)}`,
-      );
-      sendLine(socket, RESP_OK);
-      return;
-    }
-
-    appendLog(
-      "exception.log",
-      `${peer} insufficient funds user=${session.currentUserId} request=${request.amount.toFixed(2)} balance=${acc.balance.toFixed(2)}`,
-    );
-    sendLine(socket, RESP_ERROR);
-    return;
-  }
-
-  if (request.kind === "BYE") {
-    sendLine(socket, RESP_BYE);
-    socket.end();
   }
 }
 
 function attachLineHandler(socket: Socket, peer: string): void {
   const session: Session = {
+    state: "INIT",
     currentUserId: null,
-    authenticated: false,
   };
 
   let buffer = "";
@@ -179,16 +226,15 @@ function attachLineHandler(socket: Socket, peer: string): void {
       if (idx < 0) {
         break;
       }
+
       const line = buffer.slice(0, idx).trim();
       buffer = buffer.slice(idx + 1);
-
       if (!line) {
         continue;
       }
 
       const request = parseRequest(line);
       if (!request) {
-        // 不认识的命令先记一笔，再温柔地回 401。
         appendLog("exception.log", `${peer} invalid request: ${line}`);
         sendLine(socket, RESP_ERROR);
         continue;
@@ -212,6 +258,7 @@ function attachLineHandler(socket: Socket, peer: string): void {
   });
 }
 
+const port = resolvePort(process.argv[2] ?? process.env.ATM_PORT);
 const server = net.createServer((socket) => {
   const peer = `${socket.remoteAddress ?? "unknown"}:${socket.remotePort ?? 0}`;
   appendLog("server.log", `client connected: ${peer}`);
@@ -222,8 +269,7 @@ server.on("error", (error: Error) => {
   appendLog("exception.log", `server error: ${error.message}`);
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  appendLog("server.log", `server listening on 0.0.0.0:${PORT}`);
-  // Keep one startup line in console for easier debugging.
-  console.log(`ATM server started on 0.0.0.0:${PORT}`);
+server.listen(port, "0.0.0.0", () => {
+  appendLog("server.log", `server listening on 0.0.0.0:${port}`);
+  console.log(`ATM server started on 0.0.0.0:${port}`);
 });

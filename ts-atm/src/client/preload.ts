@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("atmApi", {
+  defaults: () =>
+    ipcRenderer.invoke("atm-defaults") as Promise<{ host: string; port: number }>,
   connect: (host: string, port: number) =>
     ipcRenderer.invoke("atm-connect", { host, port }) as Promise<{ ok: boolean; error?: string }>,
   send: (command: string) =>

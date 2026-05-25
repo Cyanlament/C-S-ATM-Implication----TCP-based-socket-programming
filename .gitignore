@@ -6,11 +6,19 @@
 /ts-atm/node_modules/
 
 # Runtime logs
-/rust-atm/logs/*.log
-/ts-atm/logs/*.log
+*.log
+/rust-atm/logs/
+/ts-atm/logs/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
 
 # Portable packaging outputs
 /packages/
+
+# Local tool/editor state
+/.codex
+/.codex/
 
 # Office temporary files
 ~$*.pptx
@@ -18,3 +26,6 @@
 # OS/editor
 Thumbs.db
 .DS_Store
+*.tmp
+*.bak
+*.swp
