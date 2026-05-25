@@ -56,5 +56,3 @@ powershell -ExecutionPolicy Bypass -File scripts/package-rust.ps1
 ```text
 packages/rust-atm-portable-win64.zip
 ```
-
-`packages/` 是本地输出目录，不提交到 GitHub。
