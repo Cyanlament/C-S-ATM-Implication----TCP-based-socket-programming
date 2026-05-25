@@ -62,5 +62,3 @@ powershell -ExecutionPolicy Bypass -File scripts/package-ts.ps1
 ```text
 packages/ts-atm-portable-win64.zip
 ```
-
-`node_modules/`、`dist/` 和 `packages/` 都是本地生成内容，不提交到 GitHub。
